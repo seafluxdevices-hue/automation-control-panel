@@ -39,6 +39,10 @@ class DoctorCheck {
   /// (installing a tool) where cwd doesn't matter.
   final String? fixCwd;
 
+  /// When true the fix must be launched in the background (detached) rather
+  /// than awaited — e.g. starting Appium, which blocks until it is killed.
+  final bool fixIsBackground;
+
   const DoctorCheck({
     required this.id,
     required this.label,
@@ -47,6 +51,7 @@ class DoctorCheck {
     this.detail,
     this.fixCommand,
     this.fixCwd,
+    this.fixIsBackground = false,
   });
 
   bool get isBlocking => status == DoctorStatus.fail;
@@ -58,6 +63,7 @@ class DoctorCheck {
     String? detail,
     String? fixCommand,
     String? fixCwd,
+    bool? fixIsBackground,
   }) {
     return DoctorCheck(
       id: id,
@@ -67,6 +73,7 @@ class DoctorCheck {
       detail: detail ?? this.detail,
       fixCommand: fixCommand ?? this.fixCommand,
       fixCwd: fixCwd ?? this.fixCwd,
+      fixIsBackground: fixIsBackground ?? this.fixIsBackground,
     );
   }
 }

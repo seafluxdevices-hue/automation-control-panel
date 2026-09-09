@@ -224,65 +224,121 @@ class _ProjectCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
     final lastOpened = project.lastOpenedAt;
     final openedLabel = lastOpened == null
         ? 'Never opened'
-        : 'Last opened ${_relativeTime(lastOpened)}';
+        : _relativeTime(lastOpened);
+
+    // Derive a stable accent color from the first letter.
+    final initial = project.name.isNotEmpty
+        ? project.name[0].toUpperCase()
+        : '?';
+    final accentColor = _projectColor(project.name, cs);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
-      child: InkWell(
+      child: Material(
+        color: cs.surface,
         borderRadius: BorderRadius.circular(12),
-        onTap: () => _openProject(context),
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border.all(color: cs.outlineVariant),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-          child: Row(
-            children: [
-              // Surfaces chips
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Text(
-                          project.name,
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w600),
-                        ),
-                        if (project.isPinned) ...[
-                          const SizedBox(width: 6),
-                          Icon(Icons.push_pin_rounded,
-                              size: 14, color: cs.primary),
-                        ],
-                      ],
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => _openProject(context),
+          child: Container(
+            decoration: BoxDecoration(
+              border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.7)),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // ── Left accent strip ─────────────────────────────────
+                  Container(
+                    width: 4,
+                    decoration: BoxDecoration(
+                      color: accentColor,
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(12),
+                        bottomLeft: Radius.circular(12),
+                      ),
                     ),
-                    const SizedBox(height: 6),
-                    Wrap(
-                      spacing: 6,
-                      children: project.surfaces
-                          .map((s) => _SurfaceChip(surface: s))
-                          .toList(),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      openedLabel,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: cs.onSurfaceVariant,
+                  ),
+
+                  // ── Main content ──────────────────────────────────────
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 12, 4, 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Name + pin
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  project.name,
+                                  style: tt.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 0.1,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              if (project.isPinned)
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 4),
+                                  child: Icon(Icons.push_pin_rounded,
+                                      size: 13, color: accentColor),
+                                ),
+                            ],
                           ),
+                          const SizedBox(height: 7),
+
+                          // Surface chips
+                          Wrap(
+                            spacing: 5,
+                            runSpacing: 4,
+                            children: project.surfaces
+                                .map((s) => _SurfaceChip(surface: s))
+                                .toList(),
+                          ),
+                          const SizedBox(height: 8),
+
+                          // Footer: last-opened + open arrow
+                          Row(
+                            children: [
+                              Icon(Icons.access_time_rounded,
+                                  size: 11, color: cs.onSurfaceVariant),
+                              const SizedBox(width: 4),
+                              Expanded(
+                                child: Text(
+                                  openedLabel,
+                                  style: tt.labelSmall?.copyWith(
+                                    color: cs.onSurfaceVariant,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
-                  ],
-                ),
+                  ),
+
+                  // ── Context menu ──────────────────────────────────────
+                  Padding(
+                    padding: const EdgeInsets.only(right: 2),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [_ProjectMenu(project: project)],
+                    ),
+                  ),
+                ],
               ),
-              // Context menu
-              _ProjectMenu(project: project),
-            ],
+            ),
           ),
         ),
       ),
@@ -301,11 +357,29 @@ class _ProjectCard extends StatelessWidget {
 
   static String _relativeTime(DateTime t) {
     final diff = DateTime.now().difference(t);
-    if (diff.inMinutes < 1) return 'just now';
-    if (diff.inHours < 1) return '${diff.inMinutes}m ago';
-    if (diff.inDays < 1) return '${diff.inHours}h ago';
-    if (diff.inDays < 7) return '${diff.inDays}d ago';
-    return '${t.day}/${t.month}/${t.year}';
+    if (diff.inMinutes < 1) return 'Opened just now';
+    if (diff.inHours < 1) return 'Opened ${diff.inMinutes}m ago';
+    if (diff.inDays < 1) return 'Opened ${diff.inHours}h ago';
+    if (diff.inDays < 7) return 'Opened ${diff.inDays}d ago';
+    return 'Opened ${t.day}/${t.month}/${t.year}';
+  }
+
+  /// Returns a stable accent color derived from the project name so each
+  /// project consistently gets the same color across sessions.
+  static Color _projectColor(String name, ColorScheme cs) {
+    // Rotate through a small palette keyed by name hash.
+    const palette = [
+      Color(0xFF2563EB), // blue
+      Color(0xFF16A34A), // green
+      Color(0xFFD97706), // amber
+      Color(0xFF9333EA), // purple
+      Color(0xFFDC2626), // red
+      Color(0xFF0891B2), // cyan
+      Color(0xFFDB2777), // pink
+      Color(0xFF65A30D), // lime
+    ];
+    final idx = name.codeUnits.fold(0, (a, b) => a + b) % palette.length;
+    return palette[idx];
   }
 }
 
@@ -317,16 +391,19 @@ class _SurfaceChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.secondaryContainer,
+        color: cs.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.5)),
       ),
       child: Text(
         '${surface.icon}  ${surface.name}',
         style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSecondaryContainer,
+              color: cs.onSurfaceVariant,
+              fontSize: 11,
             ),
       ),
     );

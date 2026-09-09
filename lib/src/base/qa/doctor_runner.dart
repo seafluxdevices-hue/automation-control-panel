@@ -478,6 +478,10 @@ class DoctorRunner {
       status: DoctorStatus.fail,
       fixHint: fixHint,
       detail: 'No response from $baseUrl/status',
+      // Appium is a long-running server — launch it detached so the fix
+      // button doesn't block waiting for a process that never exits.
+      fixCommand: 'appium --port 4723',
+      fixIsBackground: true,
     );
   }
 
@@ -526,9 +530,8 @@ class DoctorRunner {
         label: label,
         status: booted ? DoctorStatus.pass : DoctorStatus.fail,
         detail: booted ? 'UDID: $udid' : 'UDID $udid not in booted list',
-        fixHint: booted
-            ? null
-            : 'Boot the simulator: xcrun simctl boot $udid',
+        fixHint: booted ? null : 'Boot the simulator: xcrun simctl boot $udid',
+        fixCommand: booted ? null : 'xcrun simctl boot $udid',
       );
     } catch (e) {
       return DoctorCheck(

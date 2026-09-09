@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_boilerplate/src/base/dependencyinjection/locator.dart';
+import 'package:flutter_boilerplate/src/base/qa/process_gateway.dart';
 import 'package:flutter_boilerplate/src/models/qa/doctor_model.dart';
 import 'package:flutter_boilerplate/src/models/qa/manifest_model.dart';
 import 'package:flutter_boilerplate/src/providers/qa/qa_provider.dart';
@@ -183,7 +185,13 @@ class _DoctorResultsState extends State<_DoctorResults> {
           // Expanded check list
           if (_expanded) ...[
             const SizedBox(height: 6),
-            ...result.checks.map((c) => _CheckRow(check: c)),
+            ...result.checks.map((c) => _CheckRow(
+                  check: c,
+                  onFixApplied: () => context.read<QAProvider>().runDoctor(
+                        recipeId: widget.recipeId,
+                        iosTarget: widget.iosTarget,
+                      ),
+                )),
           ],
 
           // Re-check button
@@ -227,18 +235,60 @@ class _DoctorResultsState extends State<_DoctorResults> {
 
 // ── Individual check row ──────────────────────────────────────────────────────
 
-class _CheckRow extends StatelessWidget {
+class _CheckRow extends StatefulWidget {
   final DoctorCheck check;
 
-  const _CheckRow({required this.check});
+  /// Called after a fix command finishes so the parent can re-run Doctor.
+  final VoidCallback? onFixApplied;
+
+  const _CheckRow({required this.check, this.onFixApplied});
+
+  @override
+  State<_CheckRow> createState() => _CheckRowState();
+}
+
+class _CheckRowState extends State<_CheckRow> {
+  _FixState _fixState = _FixState.idle;
+  String? _fixError;
+
+  Future<void> _runFix() async {
+    final cmd = widget.check.fixCommand;
+    if (cmd == null) return;
+    setState(() {
+      _fixState = _FixState.running;
+      _fixError = null;
+    });
+    try {
+      final gw = locator<ProcessGateway>();
+      if (widget.check.fixIsBackground) {
+        await gw.detach(cmd, workingDirectory: widget.check.fixCwd);
+        // Give the background process a moment to start before re-checking.
+        await Future<void>.delayed(const Duration(seconds: 2));
+      } else {
+        await gw.exec(cmd, workingDirectory: widget.check.fixCwd);
+      }
+      if (mounted) setState(() => _fixState = _FixState.done);
+      widget.onFixApplied?.call();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _fixState = _FixState.error;
+          _fixError = e.toString().split('\n').first;
+        });
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final check = widget.check;
+    final cs = Theme.of(context).colorScheme;
+
     final color = switch (check.status) {
-      DoctorStatus.pass => Theme.of(context).colorScheme.primary,
-      DoctorStatus.warn => Theme.of(context).colorScheme.tertiary,
-      DoctorStatus.fail => Theme.of(context).colorScheme.error,
-      DoctorStatus.checking => Theme.of(context).colorScheme.onSurfaceVariant,
+      DoctorStatus.pass => cs.primary,
+      DoctorStatus.warn => cs.tertiary,
+      DoctorStatus.fail => cs.error,
+      DoctorStatus.checking => cs.onSurfaceVariant,
     };
 
     final icon = switch (check.status) {
@@ -247,6 +297,10 @@ class _CheckRow extends StatelessWidget {
       DoctorStatus.fail => Icons.cancel,
       DoctorStatus.checking => Icons.hourglass_empty,
     };
+
+    final hasFixButton = check.fixCommand != null &&
+        check.status != DoctorStatus.pass &&
+        _fixState != _FixState.done;
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
@@ -264,9 +318,56 @@ class _CheckRow extends StatelessWidget {
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
+              // ── Fix button ────────────────────────────────────────────
+              if (hasFixButton) ...[
+                const SizedBox(width: 8),
+                _fixState == _FixState.running
+                    ? const SizedBox(
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(strokeWidth: 1.5),
+                      )
+                    : SizedBox(
+                        height: 22,
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 0),
+                            textStyle: Theme.of(context)
+                                .textTheme
+                                .labelSmall
+                                ?.copyWith(fontSize: 11),
+                            side: BorderSide(
+                              color: check.status == DoctorStatus.fail
+                                  ? cs.error
+                                  : cs.tertiary,
+                            ),
+                            foregroundColor: check.status == DoctorStatus.fail
+                                ? cs.error
+                                : cs.tertiary,
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          onPressed: _runFix,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.build_outlined,
+                                size: 11,
+                                color: check.status == DoctorStatus.fail
+                                    ? cs.error
+                                    : cs.tertiary,
+                              ),
+                              const SizedBox(width: 3),
+                              const Text('Fix'),
+                            ],
+                          ),
+                        ),
+                      ),
+              ],
             ],
           ),
-          // Detail line
+          // ── Detail line ───────────────────────────────────────────────
           if (check.detail != null)
             Padding(
               padding: const EdgeInsets.only(left: 20, top: 2),
@@ -274,14 +375,24 @@ class _CheckRow extends StatelessWidget {
                 check.detail!,
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
                       fontFamily: 'monospace',
-                      color:
-                          Theme.of(context).colorScheme.onSurfaceVariant,
+                      color: cs.onSurfaceVariant,
                     ),
               ),
             ),
-          // Fix hint
-          if (check.fixHint != null &&
-              check.status != DoctorStatus.pass)
+          // ── Fix error ─────────────────────────────────────────────────
+          if (_fixState == _FixState.error && _fixError != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 20, top: 2),
+              child: Text(
+                _fixError!,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: cs.error,
+                      fontFamily: 'monospace',
+                    ),
+              ),
+            ),
+          // ── Fix hint (shown when there's no Fix button or after error) ─
+          if (check.fixHint != null && check.status != DoctorStatus.pass)
             Padding(
               padding: const EdgeInsets.only(left: 20, top: 2),
               child: Row(
@@ -289,17 +400,16 @@ class _CheckRow extends StatelessWidget {
                   Icon(
                     Icons.lightbulb_outline,
                     size: 11,
-                    color: Theme.of(context).colorScheme.tertiary,
+                    color: cs.tertiary,
                   ),
                   const SizedBox(width: 3),
                   Expanded(
                     child: Text(
                       check.fixHint!,
-                      style:
-                          Theme.of(context).textTheme.labelSmall?.copyWith(
-                                color:
-                                    Theme.of(context).colorScheme.tertiary,
-                              ),
+                      style: Theme.of(context)
+                          .textTheme
+                          .labelSmall
+                          ?.copyWith(color: cs.tertiary),
                     ),
                   ),
                 ],
@@ -310,3 +420,5 @@ class _CheckRow extends StatelessWidget {
     );
   }
 }
+
+enum _FixState { idle, running, done, error }
