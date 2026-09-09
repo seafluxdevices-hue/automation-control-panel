@@ -16,6 +16,71 @@ import 'package:flutter_boilerplate/src/models/qa/device_model.dart';
 class DeviceProbe {
   DeviceProbe._();
 
+  // ── Android SDK path resolution ─────────────────────────────────────────
+  //
+  // `avdmanager` and `sdkmanager` live inside the Android SDK, which is
+  // typically NOT on the shell PATH when the app is launched from VS Code or
+  // the Dock (launchd environment). We look in three places in order:
+  //   1. ANDROID_HOME  (the canonical env var)
+  //   2. ANDROID_SDK_ROOT  (older alias, still widely used)
+  //   3. ~/Library/Android/sdk  (Android Studio default on macOS)
+  //
+  // Returning `null` means "SDK not found" — callers show an actionable
+  // error rather than a confusing "command not found" failure.
+  static String? _androidSdkRoot() {
+    for (final envKey in ['ANDROID_HOME', 'ANDROID_SDK_ROOT']) {
+      final v = Platform.environment[envKey];
+      if (v != null && v.isNotEmpty && Directory(v).existsSync()) return v;
+    }
+    final home = Platform.environment['HOME'] ?? '';
+    final defaultPath = '$home/Library/Android/sdk';
+    if (Directory(defaultPath).existsSync()) return defaultPath;
+    return null;
+  }
+
+  /// Full path to `avdmanager`, or bare `avdmanager` as a fallback so the
+  /// login-shell PATH still has a chance to find it.
+  static String _avdmanager() {
+    final sdk = _androidSdkRoot();
+    if (sdk != null) {
+      for (final candidate in [
+        '$sdk/cmdline-tools/latest/bin/avdmanager',
+        '$sdk/tools/bin/avdmanager',
+      ]) {
+        if (File(candidate).existsSync()) return candidate;
+      }
+    }
+    return 'avdmanager';
+  }
+
+  /// Public accessor used by the UI to run sdkmanager directly (e.g. to
+  /// download a system image). Returns the resolved full path or bare name.
+  static String sdkmanagerPath() => _sdkmanager();
+
+  /// Full path to `sdkmanager`, or bare fallback.
+  static String _sdkmanager() {
+    final sdk = _androidSdkRoot();
+    if (sdk != null) {
+      for (final candidate in [
+        '$sdk/cmdline-tools/latest/bin/sdkmanager',
+        '$sdk/tools/bin/sdkmanager',
+      ]) {
+        if (File(candidate).existsSync()) return candidate;
+      }
+    }
+    return 'sdkmanager';
+  }
+
+  /// Full path to `adb`, or bare fallback.
+  static String _adb() {
+    final sdk = _androidSdkRoot();
+    if (sdk != null) {
+      final candidate = '$sdk/platform-tools/adb';
+      if (File(candidate).existsSync()) return candidate;
+    }
+    return 'adb';
+  }
+
   static Future<List<DeviceInfo>> listIosSimulators({ProcessGateway? gateway}) async {
     final gw = gateway ?? ProcessGateway();
     try {
@@ -48,19 +113,24 @@ class DeviceProbe {
     }
   }
 
+  /// Returns all Android devices: running physical devices + running emulators
+  /// (from `adb devices`) merged with all created AVDs (`avdmanager list avd`).
+  ///
+  /// A created AVD that is not currently running is included with
+  /// `booted: false` so users can see it in the Devices screen even before
+  /// they launch it — matching how iOS simulators behave.
   static Future<List<DeviceInfo>> listAndroidDevices({ProcessGateway? gateway}) async {
     final gw = gateway ?? ProcessGateway();
+
+    // ── 1. Running devices from adb ──────────────────────────────────────
+    final Map<String, DeviceInfo> byId = {};
     try {
-      final out = await gw.exec('adb devices -l', ignoreExitCode: true);
-      final result = <DeviceInfo>[];
-      // First line is the "List of devices attached" header.
+      final out = await gw.exec('${_adb()} devices -l', ignoreExitCode: true);
       for (final raw in out.split('\n').skip(1)) {
         final line = raw.trim();
         if (line.isEmpty) continue;
         final parts = line.split(RegExp(r'\s+'));
-        if (parts.length < 2 || parts[1] != 'device') {
-          continue; // skip "offline"/"unauthorized"/malformed lines
-        }
+        if (parts.length < 2 || parts[1] != 'device') continue;
         final id = parts[0];
         final modelToken = parts
             .skip(2)
@@ -69,7 +139,7 @@ class DeviceProbe {
         final name = modelToken != null
             ? modelToken.substring('model:'.length).replaceAll('_', ' ')
             : id;
-        result.add(DeviceInfo(
+        byId[id] = DeviceInfo(
           udid: id,
           name: name,
           platform: DevicePlatform.android,
@@ -77,12 +147,57 @@ class DeviceProbe {
               ? DeviceKind.simulator
               : DeviceKind.physical,
           booted: true,
-        ));
+        );
       }
-      return result;
-    } catch (_) {
-      return [];
-    }
+    } catch (_) {}
+
+    // ── 2. All created AVDs from avdmanager ──────────────────────────────
+    // `avdmanager list avd` block format (one AVD per block):
+    //   Name: Pixel_3
+    //   Device: pixel_3 (Google)
+    //   Path: /Users/…/Pixel_3.avd
+    //   Target: …
+    //   …
+    // Blocks are separated by a blank line or a line starting with "---".
+    try {
+      final out = await gw.exec(
+          '${_avdmanager()} list avd', ignoreExitCode: true);
+      String? avdName;
+      for (final raw in out.split('\n')) {
+        final line = raw.trim();
+        final nameMatch = RegExp(r'^Name:\s*(.+)$').firstMatch(line);
+        if (nameMatch != null) {
+          avdName = nameMatch.group(1)!.trim();
+          continue;
+        }
+        // End of block — blank line, separator, or next "Name:" will reset.
+        if ((line.isEmpty || line.startsWith('-')) && avdName != null) {
+          // Only add if not already present as a running emulator.
+          if (!byId.containsKey(avdName)) {
+            byId[avdName] = DeviceInfo(
+              udid: avdName,
+              name: avdName.replaceAll('_', ' '),
+              platform: DevicePlatform.android,
+              kind: DeviceKind.simulator,
+              booted: false,
+            );
+          }
+          avdName = null;
+        }
+      }
+      // Flush a trailing AVD block with no trailing separator.
+      if (avdName != null && !byId.containsKey(avdName)) {
+        byId[avdName] = DeviceInfo(
+          udid: avdName,
+          name: avdName.replaceAll('_', ' '),
+          platform: DevicePlatform.android,
+          kind: DeviceKind.simulator,
+          booted: false,
+        );
+      }
+    } catch (_) {}
+
+    return byId.values.toList();
   }
 
   /// `devicectl`'s JSON shape has changed across Xcode releases and the
@@ -226,34 +341,69 @@ class DeviceProbe {
   static Future<List<AndroidDeviceProfile>> listAndroidDeviceProfiles({ProcessGateway? gateway}) async {
     final gw = gateway ?? ProcessGateway();
     try {
-      final out = await gw.exec('avdmanager list device', ignoreExitCode: true);
+      final out = await gw.exec('${_avdmanager()} list device', ignoreExitCode: true);
       return parseAndroidDeviceProfiles(out);
     } catch (_) {
       return [];
     }
   }
 
-  /// Parses `sdkmanager --list_installed`'s table for already-installed
+  /// Parses `sdkmanager --list_installed` output for installed
   /// `system-images;...` package paths — the values `avdmanager create avd
-  /// -k` needs. Exposed separately for the same testability reason as
-  /// [parseAndroidDeviceProfiles].
+  /// -k` needs.
+  ///
+  /// Handles two formats:
+  ///   • Legacy (sdkmanager ≤10): pipe-delimited table
+  ///       `system-images;android-34;google_apis;arm64-v8a | 4 | ...`
+  ///   • Current (sdkmanager 23+, which deprecated itself and now wraps the
+  ///     Android CLI): space-aligned table where the first token on each
+  ///     non-header line is the package path, e.g.:
+  ///       `  system-images;android-35;google_apis;arm64-v8a   4.0   ...`
   static List<String> parseInstalledSystemImages(String output) {
     final result = <String>[];
     for (final raw in output.split('\n')) {
-      final firstCol = raw.split('|').first.trim();
-      if (firstCol.startsWith('system-images;')) result.add(firstCol);
+      // Both formats have the package path as the first non-whitespace token.
+      final trimmed = raw.trim();
+      if (!trimmed.startsWith('system-images;')) continue;
+      // Grab everything up to the first whitespace or pipe.
+      final pkg = trimmed.split(RegExp(r'[\s|]')).first.trim();
+      if (pkg.isNotEmpty) result.add(pkg);
     }
     return result;
   }
 
+  /// Returns installed system images, falling back to scanning the
+  /// `system-images/` directory on disk when `sdkmanager` output is empty
+  /// (covers the case where sdkmanager is deprecated / changes output format
+  /// again, but the images were installed via Android Studio's GUI).
   static Future<List<String>> listAndroidSystemImages({ProcessGateway? gateway}) async {
     final gw = gateway ?? ProcessGateway();
     try {
-      final out = await gw.exec('sdkmanager --list_installed', ignoreExitCode: true);
-      return parseInstalledSystemImages(out);
-    } catch (_) {
-      return [];
+      final out = await gw.exec('${_sdkmanager()} --list_installed', ignoreExitCode: true);
+      final parsed = parseInstalledSystemImages(out);
+      if (parsed.isNotEmpty) return parsed;
+    } catch (_) {}
+
+    // Fallback: scan the SDK's system-images directory directly.
+    // Layout: <sdk>/system-images/<api>/<tag>/<abi>/
+    final sdk = _androidSdkRoot();
+    if (sdk == null) return [];
+    final sysImgDir = Directory('$sdk/system-images');
+    if (!sysImgDir.existsSync()) return [];
+    final result = <String>[];
+    for (final api in sysImgDir.listSync().whereType<Directory>()) {
+      for (final tag in api.listSync().whereType<Directory>()) {
+        for (final abi in tag.listSync().whereType<Directory>()) {
+          // e.g. system-images;android-35;google_apis;arm64-v8a
+          result.add(
+            'system-images;${api.path.split('/').last};'
+            '${tag.path.split('/').last};'
+            '${abi.path.split('/').last}',
+          );
+        }
+      }
     }
+    return result;
   }
 
   /// Creates a new AVD; auto-answers avdmanager's "create a custom hardware
@@ -267,6 +417,6 @@ class DeviceProbe {
   }) async {
     final gw = gateway ?? ProcessGateway();
     await gw.exec(
-        'echo no | avdmanager create avd -n "$name" -k "$systemImage" -d "$device"');
+        'echo no | ${_avdmanager()} create avd -n "$name" -k "$systemImage" -d "$device"');
   }
 }

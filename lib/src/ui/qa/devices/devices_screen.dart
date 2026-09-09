@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_boilerplate/src/base/qa/device_probe.dart';
+import 'package:flutter_boilerplate/src/base/qa/process_gateway.dart';
 import 'package:flutter_boilerplate/src/models/qa/device_model.dart';
 import 'package:flutter_boilerplate/src/providers/qa/run_provider.dart';
 import 'package:provider/provider.dart';
@@ -26,9 +28,6 @@ class _DevicesScreenState extends State<DevicesScreen>
   List<DeviceInfo> _android = [];
   List<DeviceInfo> _ios = [];
 
-  // Simulator/physical filter — shared across both tabs (iOS mixes both
-  // kinds into one list; Android real devices show up here too via `adb
-  // devices`, not just AVDs).
   DeviceKind? _kindFilter;
 
   @override
@@ -63,7 +62,7 @@ class _DevicesScreenState extends State<DevicesScreen>
     final platform = await showDialog<DevicePlatform>(
       context: context,
       builder: (ctx) => SimpleDialog(
-        title: const Text('Add simulator/emulator'),
+        title: const Text('Add simulator / emulator'),
         children: [
           SimpleDialogOption(
             onPressed: () => Navigator.pop(ctx, DevicePlatform.ios),
@@ -77,7 +76,7 @@ class _DevicesScreenState extends State<DevicesScreen>
       ),
     );
     if (platform == null || !mounted) return;
-    bool? created;
+    final bool? created;
     if (platform == DevicePlatform.ios) {
       created = await showDialog<bool>(
         context: context,
@@ -103,10 +102,7 @@ class _DevicesScreenState extends State<DevicesScreen>
         title: const Text('Devices'),
         bottom: TabBar(
           controller: _tabController,
-          tabs: const [
-            Tab(text: 'Android'),
-            Tab(text: 'iOS'),
-          ],
+          tabs: const [Tab(text: 'Android'), Tab(text: 'iOS')],
         ),
         actions: [
           Tooltip(
@@ -169,6 +165,8 @@ class _DevicesScreenState extends State<DevicesScreen>
   }
 }
 
+// ── Device list ────────────────────────────────────────────────────────────
+
 class _DeviceList extends StatelessWidget {
   final List<DeviceInfo> devices;
   final DeviceKind? kindFilter;
@@ -184,9 +182,10 @@ class _DeviceList extends StatelessWidget {
       return Center(
         child: Text(
           devices.isEmpty ? 'No devices found' : 'No devices match this filter',
-          style: Theme.of(
-            context,
-          ).textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+          style: Theme.of(context)
+              .textTheme
+              .bodyMedium
+              ?.copyWith(color: cs.onSurfaceVariant),
         ),
       );
     }
@@ -194,7 +193,7 @@ class _DeviceList extends StatelessWidget {
       builder: (context, run, _) => ListView.separated(
         padding: const EdgeInsets.all(16),
         itemCount: filtered.length,
-        separatorBuilder: (_, _) => const Divider(height: 1),
+        separatorBuilder: (_, _x) => const Divider(height: 1),
         itemBuilder: (context, index) {
           final d = filtered[index];
           final busy = run.isDeviceBusy(d.udid);
@@ -209,7 +208,7 @@ class _DeviceList extends StatelessWidget {
             ),
             title: Text(d.name),
             subtitle: Text(
-              '${d.kind == DeviceKind.simulator ? 'Simulator' : 'Physical device'}'
+              '${d.kind == DeviceKind.simulator ? 'Simulator' : 'Physical'}'
               ' · ${d.udid}',
               style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
               overflow: TextOverflow.ellipsis,
@@ -219,12 +218,193 @@ class _DeviceList extends StatelessWidget {
               backgroundColor: busy
                   ? cs.errorContainer
                   : (d.booted
-                        ? cs.primaryContainer
-                        : cs.surfaceContainerHighest),
+                      ? cs.primaryContainer
+                      : cs.surfaceContainerHighest),
               visualDensity: VisualDensity.compact,
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+// ── Shared dialog primitives ───────────────────────────────────────────────
+
+/// Themed, bordered text-field that matches the app's primary colour.
+class _DField extends StatelessWidget {
+  final TextEditingController controller;
+  final String label;
+  final String hint;
+  final bool autofocus;
+  const _DField({
+    required this.controller,
+    required this.label,
+    required this.hint,
+    this.autofocus = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return TextField(
+      controller: controller,
+      autofocus: autofocus,
+      style: TextStyle(fontSize: 14, color: cs.onSurface),
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: hint,
+        labelStyle: TextStyle(color: cs.primary, fontSize: 13),
+        hintStyle: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide(color: cs.primary, width: 2),
+        ),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        isDense: true,
+      ),
+    );
+  }
+}
+
+/// Themed dropdown. `isExpanded: true` prevents RenderFlex overflows when
+/// system-image package names are long.
+class _DDropdown<T> extends StatelessWidget {
+  final T? value;
+  final String label;
+  final List<DropdownMenuItem<T>> items;
+  final ValueChanged<T?> onChanged;
+  const _DDropdown({
+    required this.value,
+    required this.label,
+    required this.items,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return DropdownButtonFormField<T>(
+      initialValue: value,
+      isExpanded: true,
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: TextStyle(color: cs.primary, fontSize: 13),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide(color: cs.primary, width: 2),
+        ),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        isDense: true,
+      ),
+      style: TextStyle(fontSize: 13, color: cs.onSurface),
+      items: items,
+      onChanged: onChanged,
+    );
+  }
+}
+
+/// Loading spinner / error banner — wraps the dialog body while SDK data loads.
+class _DStateWrapper extends StatelessWidget {
+  final bool loading;
+  final String? error;
+  final VoidCallback onRetry;
+  final Widget child;
+  const _DStateWrapper({
+    required this.loading,
+    required this.error,
+    required this.onRetry,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    if (loading) {
+      return const SizedBox(
+        width: 380,
+        height: 100,
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (error != null) {
+      return SizedBox(
+        width: 380,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Icon(Icons.error_outline, size: 18, color: cs.error),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(error!,
+                    style: TextStyle(color: cs.error, fontSize: 13)),
+              ),
+            ]),
+            const SizedBox(height: 14),
+            OutlinedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh, size: 16),
+              label: const Text('Retry'),
+            ),
+          ],
+        ),
+      );
+    }
+    return child;
+  }
+}
+
+/// Card panel used for "SDK not found" / "no images" states.
+class _InfoCard extends StatelessWidget {
+  final IconData icon;
+  final Color? iconColor;
+  final String title;
+  final String body;
+  final Widget? footer;
+  const _InfoCard({
+    required this.icon,
+    this.iconColor,
+    required this.title,
+    required this.body,
+    this.footer,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: cs.outlineVariant),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Icon(icon, size: 18, color: iconColor ?? cs.primary),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(title,
+                  style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: cs.onSurface)),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          Text(body,
+              style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant)),
+          if (footer != null) ...[const SizedBox(height: 12), footer!],
+        ],
       ),
     );
   }
@@ -253,13 +433,12 @@ class _AddIosSimulatorDialogState extends State<_AddIosSimulatorDialog> {
   @override
   void initState() {
     super.initState();
+    _nameCtrl.addListener(() => setState(() {}));
     _load();
   }
 
-  // `simctl` occasionally hangs (cold Xcode cache, a stuck simulator daemon)
-  // — without a timeout, that leaves this dialog spinning forever with no
-  // way out except force-quitting the app. A bounded wait + a visible
-  // error/retry beats a silent hang.
+  // `simctl` occasionally hangs on a cold Xcode cache — bounded wait + retry
+  // beats a dialog that spins forever.
   Future<void> _load() async {
     setState(() {
       _loading = true;
@@ -280,7 +459,7 @@ class _AddIosSimulatorDialogState extends State<_AddIosSimulatorDialog> {
       if (!mounted) return;
       setState(() {
         _loadError = e is TimeoutException
-            ? 'Timed out waiting for simctl — it may be stuck. Try again.'
+            ? 'Timed out waiting for simctl. Try again.'
             : 'Could not load device types/runtimes: $e';
         _loading = false;
       });
@@ -318,104 +497,91 @@ class _AddIosSimulatorDialogState extends State<_AddIosSimulatorDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final canCreate = !_creating &&
+        _selectedType != null &&
+        _selectedRuntime != null &&
+        _nameCtrl.text.trim().isNotEmpty;
+
     return AlertDialog(
-      title: const Text('Add iOS simulator'),
-      content: _loading
-          ? const SizedBox(
-              width: 320,
-              height: 80,
-              child: Center(child: CircularProgressIndicator()),
-            )
-          : _loadError != null
-          ? SizedBox(
-              width: 320,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _loadError!,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  OutlinedButton(onPressed: _load, child: const Text('Retry')),
-                ],
+      title: Row(children: [
+        Icon(Icons.phone_iphone, size: 20, color: cs.primary),
+        const SizedBox(width: 8),
+        const Text('Add iOS Simulator',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
+      ]),
+      contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+      content: _DStateWrapper(
+        loading: _loading,
+        error: _loadError,
+        onRetry: _load,
+        child: SizedBox(
+          width: 380,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _DField(
+                controller: _nameCtrl,
+                label: 'Simulator name',
+                hint: 'e.g. My iPhone 17 Pro',
+                autofocus: true,
               ),
-            )
-          : SizedBox(
-              width: 360,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  TextField(
-                    controller: _nameCtrl,
-                    autofocus: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Name',
-                      border: OutlineInputBorder(),
-                      hintText: 'My iPhone 17 Pro',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<IosDeviceType>(
-                    initialValue: _selectedType,
-                    decoration: const InputDecoration(
-                      labelText: 'Device type',
-                      border: OutlineInputBorder(),
-                    ),
-                    items: _deviceTypes
-                        .map(
-                          (t) =>
-                              DropdownMenuItem(value: t, child: Text(t.name)),
-                        )
-                        .toList(),
-                    onChanged: (v) => setState(() => _selectedType = v),
-                  ),
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<IosRuntime>(
-                    initialValue: _selectedRuntime,
-                    decoration: const InputDecoration(
-                      labelText: 'OS version',
-                      border: OutlineInputBorder(),
-                    ),
-                    items: _runtimes
-                        .map(
-                          (r) => DropdownMenuItem(
-                            value: r,
-                            child: Text('iOS ${r.version}'),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (v) => setState(() => _selectedRuntime = v),
-                  ),
-                  if (_error != null) ...[
-                    const SizedBox(height: 12),
-                    Text(
-                      _error!,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.error,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ],
+              const SizedBox(height: 14),
+              _DDropdown<IosDeviceType>(
+                value: _selectedType,
+                label: 'Device type',
+                items: _deviceTypes
+                    .map((t) => DropdownMenuItem(
+                          value: t,
+                          child: Text(t.name,
+                              overflow: TextOverflow.ellipsis, maxLines: 1),
+                        ))
+                    .toList(),
+                onChanged: (v) => setState(() => _selectedType = v),
               ),
-            ),
+              const SizedBox(height: 14),
+              _DDropdown<IosRuntime>(
+                value: _selectedRuntime,
+                label: 'iOS version',
+                items: _runtimes
+                    .map((r) => DropdownMenuItem(
+                          value: r,
+                          child: Text('iOS ${r.version}',
+                              overflow: TextOverflow.ellipsis, maxLines: 1),
+                        ))
+                    .toList(),
+                onChanged: (v) => setState(() => _selectedRuntime = v),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Icon(Icons.error_outline, size: 16, color: cs.error),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(_error!,
+                        style: TextStyle(color: cs.error, fontSize: 12)),
+                  ),
+                ]),
+              ],
+              const SizedBox(height: 4),
+            ],
+          ),
+        ),
+      ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
         FilledButton(
-          onPressed: _creating ? null : _create,
+          onPressed: canCreate ? _create : null,
           child: _creating
-              ? const SizedBox(
+              ? SizedBox(
                   width: 16,
                   height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: cs.onPrimary),
                 )
               : const Text('Create'),
         ),
@@ -441,18 +607,35 @@ class _AddAndroidAvdDialogState extends State<_AddAndroidAvdDialog> {
   String? _selectedImage;
   bool _loading = true;
   bool _creating = false;
+  bool _downloading = false;
   String? _error;
   String? _loadError;
+  String? _downloadLog;
 
   @override
   void initState() {
     super.initState();
+    // avdmanager only accepts [a-zA-Z0-9._-] — replace any other character
+    // (most commonly spaces) with '_' as the user types, so the Create
+    // button is never silently broken by an invalid name.
+    _nameCtrl.addListener(() {
+      final raw = _nameCtrl.text;
+      final clean = raw.replaceAll(RegExp(r'[^a-zA-Z0-9._\-]'), '_');
+      if (clean != raw) {
+        final pos = _nameCtrl.selection.extentOffset
+            .clamp(0, clean.length) as int;
+        _nameCtrl.value = TextEditingValue(
+          text: clean,
+          selection: TextSelection.collapsed(offset: pos),
+        );
+      }
+      setState(() {});
+    });
     _load();
   }
 
-  // avdmanager/sdkmanager are JVM tools — slow to cold-start, and
-  // sdkmanager can sit forever waiting on stdin for a license prompt that
-  // never comes. A bounded wait + a visible error/retry beats a silent hang.
+  // avdmanager/sdkmanager are JVM tools — slow cold-start + possible license
+  // stdin hang. Bounded wait beats a silent spinner.
   Future<void> _load() async {
     setState(() {
       _loading = true;
@@ -462,7 +645,7 @@ class _AddAndroidAvdDialogState extends State<_AddAndroidAvdDialog> {
       final results = await Future.wait([
         DeviceProbe.listAndroidDeviceProfiles(),
         DeviceProbe.listAndroidSystemImages(),
-      ]).timeout(const Duration(seconds: 20));
+      ]).timeout(const Duration(seconds: 30));
       if (!mounted) return;
       setState(() {
         _profiles = results[0] as List<AndroidDeviceProfile>;
@@ -473,9 +656,8 @@ class _AddAndroidAvdDialogState extends State<_AddAndroidAvdDialog> {
       if (!mounted) return;
       setState(() {
         _loadError = e is TimeoutException
-            ? 'Timed out waiting for avdmanager/sdkmanager — they may be '
-                  'stuck (e.g. on a license prompt). Try again.'
-            : 'Could not load device profiles/system images: $e';
+            ? 'Timed out loading Android SDK data. Try again.'
+            : 'Could not load SDK data: $e';
         _loading = false;
       });
     }
@@ -490,7 +672,9 @@ class _AddAndroidAvdDialogState extends State<_AddAndroidAvdDialog> {
   Future<void> _create() async {
     final profile = _selectedProfile;
     final image = _selectedImage;
-    final name = _nameCtrl.text.trim();
+    // Sanitize: avdmanager allows only [a-zA-Z0-9._-]
+    final name =
+        _nameCtrl.text.trim().replaceAll(RegExp(r'[^a-zA-Z0-9._\-]'), '_');
     if (profile == null || image == null || name.isEmpty) return;
     setState(() {
       _creating = true;
@@ -498,10 +682,7 @@ class _AddAndroidAvdDialogState extends State<_AddAndroidAvdDialog> {
     });
     try {
       await DeviceProbe.createAndroidAvd(
-        name: name,
-        systemImage: image,
-        device: profile.id,
-      );
+          name: name, systemImage: image, device: profile.id);
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
@@ -510,118 +691,218 @@ class _AddAndroidAvdDialogState extends State<_AddAndroidAvdDialog> {
     }
   }
 
+  Future<void> _downloadSystemImage() async {
+    const tag = 'google_apis';
+    const api = 'android-35';
+    final abi = _isAppleSilicon() ? 'arm64-v8a' : 'x86_64';
+    final pkg = 'system-images;$api;$tag;$abi';
+    setState(() {
+      _downloading = true;
+      _downloadLog = 'Downloading $pkg…';
+      _error = null;
+    });
+    try {
+      await ProcessGateway().exec(
+        'yes | ${DeviceProbe.sdkmanagerPath()} "$pkg"',
+        ignoreExitCode: true,
+      );
+      if (!mounted) return;
+      setState(() => _downloadLog = 'Done — reloading…');
+      await _load();
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Download failed: $e');
+    } finally {
+      if (mounted) setState(() => _downloading = false);
+    }
+  }
+
+  static bool _isAppleSilicon() {
+    try {
+      return (Process.runSync('uname', ['-m']).stdout as String).trim() ==
+          'arm64';
+    } catch (_) {
+      return true;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final noSdk = !_loading && (_profiles.isEmpty || _systemImages.isEmpty);
+    final cs = Theme.of(context).colorScheme;
+    final noProfiles = !_loading && _profiles.isEmpty;
+    final noImages = !_loading && _profiles.isNotEmpty && _systemImages.isEmpty;
+    final ready = !_loading && _profiles.isNotEmpty && _systemImages.isNotEmpty;
+    final canCreate = ready &&
+        !_creating &&
+        _selectedProfile != null &&
+        _selectedImage != null &&
+        _nameCtrl.text.trim().isNotEmpty;
+
     return AlertDialog(
-      title: const Text('Add Android emulator'),
-      content: _loading
-          ? const SizedBox(
-              width: 320,
-              height: 80,
-              child: Center(child: CircularProgressIndicator()),
-            )
-          : _loadError != null
-          ? SizedBox(
-              width: 320,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _loadError!,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
-                    ),
+      title: Row(children: [
+        Icon(Icons.android, size: 20, color: cs.primary),
+        const SizedBox(width: 8),
+        const Text('Add Android Emulator',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
+      ]),
+      contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+      content: _DStateWrapper(
+        loading: _loading,
+        error: _loadError,
+        onRetry: _load,
+        child: SizedBox(
+          width: 380,
+          child: noProfiles
+              // ── SDK tools not found ──────────────────────────────────
+              ? _InfoCard(
+                  icon: Icons.warning_amber_rounded,
+                  iconColor: cs.error,
+                  title: 'Android SDK not found',
+                  body: 'Install the Android SDK command-line tools via '
+                      'Android Studio → Settings → SDK Manager → SDK Tools '
+                      '→ Android SDK Command-line Tools.',
+                  footer: OutlinedButton.icon(
+                    onPressed: _load,
+                    icon: const Icon(Icons.refresh, size: 16),
+                    label: const Text('Retry'),
                   ),
-                  const SizedBox(height: 12),
-                  OutlinedButton(onPressed: _load, child: const Text('Retry')),
-                ],
-              ),
-            )
-          : noSdk
-          ? const SizedBox(
-              width: 360,
-              child: Text(
-                'No Android SDK device profiles / installed system images '
-                'found — install the Android SDK command-line tools '
-                '(avdmanager, sdkmanager) and at least one system image '
-                'first, then try again.',
-              ),
-            )
-          : SizedBox(
-              width: 360,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  TextField(
-                    controller: _nameCtrl,
-                    autofocus: true,
-                    decoration: const InputDecoration(
-                      labelText: 'AVD name',
-                      border: OutlineInputBorder(),
-                      hintText: 'My_Pixel_7',
+                )
+              : noImages
+              // ── No system images installed ───────────────────────────
+              ? Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _InfoCard(
+                      icon: Icons.download_for_offline_outlined,
+                      title: 'No system image installed',
+                      body: 'An Android system image is required to create an '
+                          'emulator. Tap Download to install the recommended '
+                          'image (Android 35 · Google APIs · '
+                          '${_isAppleSilicon() ? 'arm64-v8a' : 'x86_64'}).',
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<AndroidDeviceProfile>(
-                    initialValue: _selectedProfile,
-                    decoration: const InputDecoration(
-                      labelText: 'Device profile',
-                      border: OutlineInputBorder(),
-                    ),
-                    items: _profiles
-                        .map(
-                          (p) =>
-                              DropdownMenuItem(value: p, child: Text(p.name)),
-                        )
-                        .toList(),
-                    onChanged: (v) => setState(() => _selectedProfile = v),
-                  ),
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<String>(
-                    initialValue: _selectedImage,
-                    decoration: const InputDecoration(
-                      labelText: 'System image',
-                      border: OutlineInputBorder(),
-                    ),
-                    items: _systemImages
-                        .map(
-                          (img) => DropdownMenuItem(
-                            value: img,
-                            child: Text(img, overflow: TextOverflow.ellipsis),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (v) => setState(() => _selectedImage = v),
-                  ),
-                  if (_error != null) ...[
-                    const SizedBox(height: 12),
-                    Text(
-                      _error!,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.error,
-                        fontSize: 12,
+                    if (_downloadLog != null) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: cs.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          _downloadLog!,
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: cs.primary,
+                              fontFamily: 'monospace'),
+                        ),
                       ),
+                    ],
+                    if (_error != null) ...[
+                      const SizedBox(height: 8),
+                      Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(Icons.error_outline,
+                                size: 16, color: cs.error),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(_error!,
+                                  style:
+                                      TextStyle(color: cs.error, fontSize: 12)),
+                            ),
+                          ]),
+                    ],
+                    const SizedBox(height: 16),
+                    FilledButton.icon(
+                      onPressed: _downloading ? null : _downloadSystemImage,
+                      icon: _downloading
+                          ? SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: cs.onPrimary),
+                            )
+                          : const Icon(Icons.download_rounded, size: 16),
+                      label:
+                          Text(_downloading ? 'Downloading…' : 'Download image'),
                     ),
+                    const SizedBox(height: 4),
                   ],
-                ],
-              ),
-            ),
+                )
+              // ── Happy path: profiles + images ready ──────────────────
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _DField(
+                      controller: _nameCtrl,
+                      label: 'AVD name',
+                      hint: 'e.g. Pixel_9_API35  (spaces → _)',
+                      autofocus: true,
+                    ),
+                    const SizedBox(height: 14),
+                    _DDropdown<AndroidDeviceProfile>(
+                      value: _selectedProfile,
+                      label: 'Device profile',
+                      items: _profiles
+                          .map((p) => DropdownMenuItem(
+                                value: p,
+                                child: Text(p.name,
+                                    overflow: TextOverflow.ellipsis,
+                                    maxLines: 1),
+                              ))
+                          .toList(),
+                      onChanged: (v) => setState(() => _selectedProfile = v),
+                    ),
+                    const SizedBox(height: 14),
+                    _DDropdown<String>(
+                      value: _selectedImage,
+                      label: 'System image',
+                      items: _systemImages
+                          .map((img) => DropdownMenuItem(
+                                value: img,
+                                child: Text(img,
+                                    overflow: TextOverflow.ellipsis,
+                                    maxLines: 1),
+                              ))
+                          .toList(),
+                      onChanged: (v) => setState(() => _selectedImage = v),
+                    ),
+                    if (_error != null) ...[
+                      const SizedBox(height: 12),
+                      Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(Icons.error_outline,
+                                size: 16, color: cs.error),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(_error!,
+                                  style:
+                                      TextStyle(color: cs.error, fontSize: 12)),
+                            ),
+                          ]),
+                    ],
+                    const SizedBox(height: 4),
+                  ],
+                ),
+        ),
+      ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
-        if (!noSdk)
+        if (ready)
           FilledButton(
-            onPressed: _creating ? null : _create,
+            onPressed: canCreate ? _create : null,
             child: _creating
-                ? const SizedBox(
+                ? SizedBox(
                     width: 16,
                     height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: cs.onPrimary),
                   )
                 : const Text('Create'),
           ),

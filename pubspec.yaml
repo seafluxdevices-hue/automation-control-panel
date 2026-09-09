@@ -1,5 +1,5 @@
 name: flutter_boilerplate
-description: A new Flutter project.
+description: QA automation control panel — Centurion. Manage and run test pipelines across platforms.
 
 publish_to: "none" # Remove this line if you wish to publish to pub.dev
 
