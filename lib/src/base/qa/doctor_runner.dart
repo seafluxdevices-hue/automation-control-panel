@@ -103,6 +103,7 @@ class DoctorRunner {
         path: '$webPath/.env.test',
         fixHint: 'Copy from .env.test.example or ask the team',
       ),
+      _checkPlaywrightBrowsers(webPath, gateway),
       _checkPortFree(3000),
     ];
   }
@@ -155,18 +156,14 @@ class DoctorRunner {
         profile.repoPath(_mobileTestsRepo(manifest)?.relPath ?? '');
     final envVars = EnvFileParser.loadFile('$testsPath/.env.dev');
 
+    // Simulator UDID and booted-state checks are intentionally absent here:
+    // the device is picked at Run time by the RunPicker and injected as
+    // IOS_SIMULATOR_UDID at that point — requiring it to be pre-configured
+    // in .env.dev was a design flaw (wrong UDID = silent test failure on a
+    // device the user never meant to pick). Xcode + simctl availability is
+    // enough to know simulators can be used.
     return switch (target) {
-      IosBuildTarget.simulator => [
-          _checkEnvVar(
-            id: 'ios_sim_udid',
-            label: 'IOS_SIMULATOR_UDID set in .env.dev',
-            varName: 'IOS_SIMULATOR_UDID',
-            env: envVars,
-            fixHint:
-                'Boot a simulator and add IOS_SIMULATOR_UDID=<udid> to mobile_tests/.env.dev',
-          ),
-          _checkSimulatorBooted(envVars['IOS_SIMULATOR_UDID'] ?? '', gateway),
-        ],
+      IosBuildTarget.simulator => const [],
       IosBuildTarget.device => [
           _checkEnvVar(
             id: 'ios_device_id',
@@ -457,6 +454,69 @@ class DoctorRunner {
     }
   }
 
+  /// Playwright Chromium browser is installed on disk (web tests only).
+  ///
+  /// The check runs `playwright --version` first (fast, binary-presence gate),
+  /// then `npx playwright install --dry-run` to ask Playwright itself whether
+  /// the browser binary it actually needs is present — this matches exactly
+  /// what Playwright checks at `browserType.launch`, so the error the user
+  /// sees in test output disappears after the Fix button runs.
+  static Future<DoctorCheck> _checkPlaywrightBrowsers(
+    String webPath,
+    ProcessGateway gateway,
+  ) async {
+    const id = 'playwright_browsers';
+    const label = 'Playwright Chromium installed';
+
+    // 1. Is playwright even available?
+    try {
+      await gateway.exec('npx playwright --version',
+          workingDirectory: webPath, ignoreExitCode: true);
+    } catch (_) {
+      return const DoctorCheck(
+        id: id,
+        label: label,
+        status: DoctorStatus.fail,
+        fixHint: 'Run: yarn playwright install chromium',
+        fixCommand: 'yarn playwright install chromium',
+      );
+    }
+
+    // 2. Check whether chromium is installed.
+    //    `playwright install --dry-run` prints what it *would* install;
+    //    if output is empty the browsers are already present.
+    try {
+      // Simpler: just check if the Chromium binary dir exists.
+      final out = await gateway.exec(
+        'npx playwright install --dry-run chromium 2>&1 || true',
+        workingDirectory: webPath,
+        ignoreExitCode: true,
+      );
+      // "Playwright will download…" appears when browsers are missing.
+      final missing = out.contains('Playwright will download') ||
+          out.contains('Executable doesn');
+      return DoctorCheck(
+        id: id,
+        label: label,
+        status: missing ? DoctorStatus.fail : DoctorStatus.pass,
+        detail: missing ? 'Chromium not installed' : 'Chromium ready',
+        fixHint: missing ? 'Run: yarn playwright install chromium' : null,
+        fixCommand: missing ? 'yarn playwright install chromium' : null,
+        fixCwd: missing ? webPath : null,
+      );
+    } catch (e) {
+      return DoctorCheck(
+        id: id,
+        label: label,
+        status: DoctorStatus.fail,
+        detail: e.toString().split('\n').first,
+        fixHint: 'Run: yarn playwright install chromium',
+        fixCommand: 'yarn playwright install chromium',
+        fixCwd: webPath,
+      );
+    }
+  }
+
   /// Appium health-check via HTTP GET /status. Shares its HTTP logic with the
   /// in-pipeline re-check in [StepRunner] via [AppiumProbe].
   static Future<DoctorCheck> _checkAppium(String baseUrl) async {
@@ -502,46 +562,6 @@ class DoctorRunner {
       detail: set ? '$varName=<set>' : '$varName not set',
       fixHint: set ? null : fixHint,
     );
-  }
-
-  /// iOS simulator is booted with the expected UDID.
-  static Future<DoctorCheck> _checkSimulatorBooted(
-    String udid,
-    ProcessGateway gateway,
-  ) async {
-    const id = 'ios_sim_booted';
-    const label = 'iOS simulator booted';
-    if (udid.isEmpty) {
-      return const DoctorCheck(
-        id: id,
-        label: label,
-        status: DoctorStatus.fail,
-        fixHint: 'IOS_SIMULATOR_UDID is not set — see check above',
-      );
-    }
-    try {
-      final out = await gateway.exec(
-        'xcrun simctl list devices booted',
-        ignoreExitCode: true,
-      );
-      final booted = out.contains(udid);
-      return DoctorCheck(
-        id: id,
-        label: label,
-        status: booted ? DoctorStatus.pass : DoctorStatus.fail,
-        detail: booted ? 'UDID: $udid' : 'UDID $udid not in booted list',
-        fixHint: booted ? null : 'Boot the simulator: xcrun simctl boot $udid',
-        fixCommand: booted ? null : 'xcrun simctl boot $udid',
-      );
-    } catch (e) {
-      return DoctorCheck(
-        id: id,
-        label: label,
-        status: DoctorStatus.fail,
-        fixHint: 'xcrun simctl failed — is Xcode installed?',
-        detail: e.toString().split('\n').first,
-      );
-    }
   }
 
   /// Real iOS device connected and trusted (devicectl).

@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_boilerplate/src/base/qa/appium_probe.dart';
+import 'package:flutter_boilerplate/src/base/qa/device_probe.dart';
 import 'package:flutter_boilerplate/src/base/qa/env_file_parser.dart';
 import 'package:flutter_boilerplate/src/base/qa/process_gateway.dart';
+import 'package:flutter_boilerplate/src/models/qa/device_model.dart';
 import 'package:flutter_boilerplate/src/models/qa/machine_profile_model.dart';
 import 'package:flutter_boilerplate/src/models/qa/manifest_model.dart';
 import 'package:flutter_boilerplate/src/models/qa/run_model.dart';
@@ -54,6 +56,14 @@ class StepRunner {
     /// Raw text from the recipe card's optional spec/flags field (Phase 6).
     /// Empty/blank means "run everything" — the normal, unfiltered `command`.
     String specFlags = '',
+    /// The device/simulator UDID picked by RunPicker at run time.  When set,
+    /// it is injected into every step's env as IOS_SIMULATOR_UDID (simulator)
+    /// / IOS_DEVICE_ID (physical iOS) / ANDROID_DEVICE_ID (Android),
+    /// overriding whatever the .env.dev file says — so the test runner always
+    /// gets the device the user actually chose, not whatever was last saved.
+    String? deviceUdid,
+    DevicePlatform? devicePlatform,
+    DeviceKind? deviceKind,
     required void Function(LogLine line) onLog,
     required void Function(StepConfig step, int index, int total) onStepStart,
     required void Function(StepResult result) onStepEnd,
@@ -63,6 +73,45 @@ class StepRunner {
     final steps = recipe.stepsFor(iosTarget: iosTarget);
     final results = <StepResult>[];
     final trimmedSpecFlags = specFlags.trim();
+
+    // ── Build runtime device env overrides ──────────────────────────────────
+    // The device was picked at Run time (RunPicker); inject its UDID into env
+    // so WebdriverIO / Appium / any tool that reads UDID from env always gets
+    // the device the user actually chose rather than whatever was in .env.dev.
+    // These are overlaid after .env.dev is loaded in _runStep so they win.
+    final Map<String, String> deviceEnv = {};
+    if (deviceUdid != null && deviceUdid.isNotEmpty) {
+      if (devicePlatform == DevicePlatform.ios) {
+        if (deviceKind == DeviceKind.simulator) {
+          deviceEnv['IOS_SIMULATOR_UDID'] = deviceUdid;
+        } else {
+          deviceEnv['IOS_DEVICE_ID'] = deviceUdid;
+        }
+      } else if (devicePlatform == DevicePlatform.android) {
+        deviceEnv['ANDROID_DEVICE_ID'] = deviceUdid;
+      }
+    }
+
+    // ── Auto-boot iOS simulator if needed ────────────────────────────────────
+    // Doctor no longer checks for this because the device is picked at Run
+    // time. Boot it automatically here instead of making the user do it.
+    if (deviceUdid != null &&
+        devicePlatform == DevicePlatform.ios &&
+        deviceKind == DeviceKind.simulator) {
+      try {
+        final sims = await DeviceProbe.listIosSimulators();
+        final sim = sims.where((s) => s.udid == deviceUdid).firstOrNull;
+        if (sim != null && !sim.booted) {
+          onLog(LogLine('  booting simulator $deviceUdid…', isError: false));
+          await _gateway.exec('xcrun simctl boot $deviceUdid',
+              ignoreExitCode: true);
+          onLog(LogLine('  simulator booted', isError: false));
+        }
+      } catch (_) {
+        // Best-effort — if boot fails the test itself will fail with a
+        // clear "device not found" message, not a silent wrong-UDID error.
+      }
+    }
 
     onLog(LogLine(
       '▶ ${recipe.name} — ${steps.length} steps '
@@ -94,6 +143,7 @@ class StepRunner {
         syncEnabled: syncEnabled,
         buildEnabled: buildEnabled,
         specFlags: trimmedSpecFlags,
+        deviceEnvOverrides: deviceEnv,
         onLog: onLog,
       );
 
@@ -143,6 +193,9 @@ class StepRunner {
     required bool syncEnabled,
     required bool buildEnabled,
     required String specFlags,
+    /// Device env vars picked at Run time — merged on top of .env.dev so the
+    /// chosen UDID always wins (e.g. IOS_SIMULATOR_UDID, ANDROID_DEVICE_ID).
+    Map<String, String> deviceEnvOverrides = const {},
     required void Function(LogLine line) onLog,
   }) async {
     final began = DateTime.now();
@@ -214,6 +267,16 @@ class StepRunner {
       } else {
         onLog(LogLine('  env: ${env.length} vars from ${step.envFile}',
             isError: false));
+      }
+    }
+
+    // ── Device env overrides (runtime-picked UDID wins over .env.dev) ──────
+    // Merge after .env.dev so IOS_SIMULATOR_UDID / ANDROID_DEVICE_ID from the
+    // RunPicker always beats whatever was statically saved in the file.
+    if (deviceEnvOverrides.isNotEmpty) {
+      env = {...?env, ...deviceEnvOverrides};
+      for (final kv in deviceEnvOverrides.entries) {
+        onLog(LogLine('  env override: ${kv.key}=${kv.value}', isError: false));
       }
     }
 

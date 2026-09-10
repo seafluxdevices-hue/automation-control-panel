@@ -239,14 +239,20 @@ Future<T?> _showPickerDialog<T>(
     builder: (ctx) => Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 380),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+        constraints: BoxConstraints(
+          maxWidth: 400,
+          // Cap height so the dialog never taller than 80% of the screen,
+          // which makes the list scroll rather than overflow.
+          maxHeight: MediaQuery.of(ctx).size.height * 0.80,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Fixed header ───────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+              child: Row(
                 children: [
                   Icon(titleIcon, color: cs.primary),
                   const SizedBox(width: 10),
@@ -258,63 +264,85 @@ Future<T?> _showPickerDialog<T>(
                   ),
                 ],
               ),
-              const SizedBox(height: 16),
-              ...options.map((o) => Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(12),
-                      onTap: () => Navigator.pop(ctx, o.value),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 12,
-                        ),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: cs.outlineVariant),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(o.icon, size: 20, color: cs.primary),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
+            ),
+
+            // ── Scrollable option list ─────────────────────────────────
+            Flexible(
+              child: ListView.separated(
+                shrinkWrap: true,
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                itemCount: options.length,
+                separatorBuilder: (context, index) => const SizedBox(height: 8),
+                itemBuilder: (_, i) {
+                  final o = options[i];
+                  return InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: () => Navigator.pop(ctx, o.value),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 12),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: cs.outlineVariant),
+                        borderRadius: BorderRadius.circular(12),
+                        // Tint the first (recommended) option subtly.
+                        color: i == 0
+                            ? cs.primaryContainer.withValues(alpha: 0.25)
+                            : null,
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(o.icon,
+                              size: 20,
+                              color: i == 0 ? cs.primary : cs.onSurfaceVariant),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  o.label,
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodyMedium
+                                      ?.copyWith(
+                                        fontWeight: FontWeight.w500,
+                                        color: i == 0 ? cs.primary : null,
+                                      ),
+                                ),
+                                if (o.subtitle != null)
                                   Text(
-                                    o.label,
+                                    o.subtitle!,
                                     style: Theme.of(context)
                                         .textTheme
-                                        .bodyMedium
-                                        ?.copyWith(fontWeight: FontWeight.w500),
+                                        .labelSmall
+                                        ?.copyWith(color: cs.onSurfaceVariant),
                                   ),
-                                  if (o.subtitle != null)
-                                    Text(
-                                      o.subtitle!,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .labelSmall
-                                          ?.copyWith(color: cs.onSurfaceVariant),
-                                    ),
-                                ],
-                              ),
+                              ],
                             ),
-                            Icon(Icons.chevron_right,
-                                size: 18, color: cs.onSurfaceVariant),
-                          ],
-                        ),
+                          ),
+                          Icon(Icons.chevron_right,
+                              size: 18, color: cs.onSurfaceVariant),
+                        ],
                       ),
                     ),
-                  )),
-              Align(
-                alignment: Alignment.centerRight,
+                  );
+                },
+              ),
+            ),
+
+            // ── Fixed footer ───────────────────────────────────────────
+            const Divider(height: 1),
+            Align(
+              alignment: Alignment.centerRight,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                 child: TextButton(
                   onPressed: () => Navigator.pop(ctx),
                   child: const Text('Cancel'),
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     ),

@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_boilerplate/src/base/dependencyinjection/locator.dart';
 import 'package:flutter_boilerplate/src/base/qa/process_gateway.dart';
+import 'package:flutter_boilerplate/src/models/qa/device_model.dart';
 import 'package:flutter_boilerplate/src/base/qa/run_history_store.dart';
 import 'package:flutter_boilerplate/src/base/qa/sleep_guard.dart';
 import 'package:flutter_boilerplate/src/base/qa/step_runner.dart';
@@ -276,6 +277,9 @@ class RunProvider extends ChangeNotifier {
         buildEnabled: buildEnabled,
         iosTarget: iosTarget,
         specFlags: specFlags,
+        deviceUdid: entry.deviceUdid,
+        devicePlatform: _parsePlatform(entry.platform),
+        deviceKind: _parseKind(entry.deviceKind),
         onLog: (line) => _appendLog(entry, line),
         onStepStart: (step, index, total) {
           entry.currentStepName = step.name;
@@ -430,6 +434,22 @@ class RunProvider extends ChangeNotifier {
     _notifyTimer = null;
     notifyListeners();
   }
+
+  // ── Device parsing helpers ─────────────────────────────────────────────────
+  // RunEntry stores platform/kind as strings (for serialisation to history);
+  // these convert them back to the typed enums StepRunner needs.
+
+  static DevicePlatform? _parsePlatform(String? raw) => switch (raw) {
+        'ios' => DevicePlatform.ios,
+        'android' => DevicePlatform.android,
+        _ => null,
+      };
+
+  static DeviceKind? _parseKind(String? raw) => switch (raw) {
+        'simulator' => DeviceKind.simulator,
+        'physical' => DeviceKind.physical,
+        _ => null,
+      };
 
   @override
   void dispose() {
